@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **重组路径与时间节点分析** — 支持对单只股票进行重组路径与时间节点分析；可录入真实消息与时间点（ground truth），系统整理并参与下次分析；每次分析结果持久化，可通过 API 或 CLI 调用
+  - API: `POST /api/v1/restructuring/analyze`、`GET /api/v1/restructuring/history`、`GET /api/v1/restructuring/result/{id}`、`POST/GET /api/v1/restructuring/ground-truth`
+  - CLI: `python main.py --restructuring --stocks 600519`
+
 ### Fixed
 - 🐛 **AstrBot sender docstring misplaced** — `import time` placed before docstring in `_send_astrbot`, causing it to become dead code
 - 🐛 **Telegram Markdown link escaping** — `_convert_to_telegram_markdown` escaped `[]()` characters, breaking all Markdown links in reports

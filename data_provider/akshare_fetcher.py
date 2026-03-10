@@ -1541,6 +1541,79 @@ class AkshareFetcher(BaseFetcher):
             logger.error(f"[Akshare] 新浪接口获取板块排行也失败: {e}")
             return None
 
+    def get_stock_announcements(
+        self,
+        stock_code: str,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        days: int = 365,
+        category: str = "",
+    ) -> Optional[pd.DataFrame]:
+        """
+        Get announcement list (disclosure report) for an A-share stock from CNINFO (巨潮资讯).
+
+        Data source: akshare stock_zh_a_disclosure_report_cninfo (CNINFO disclosure list).
+        Only supports 沪深京 A-shares; HK/US stocks are not supported.
+
+        Args:
+            stock_code: A-share code, e.g. '600892', '000001'.
+            start_date: Start date YYYYMMDD. If None, computed from end_date and days.
+            end_date: End date YYYYMMDD. If None, use today.
+            days: Number of calendar days to look back when start_date is None (default 365).
+            category: Optional category filter (e.g. '年报','业绩预告','重大事项'). Use "" for all.
+
+        Returns:
+            DataFrame with columns: 代码, 简称, 公告标题, 公告时间, 公告链接; or None on failure.
+        """
+        from datetime import date, timedelta
+
+        try:
+            end_d = end_date
+            if not end_d:
+                end_d = date.today().strftime("%Y%m%d")
+            elif len(end_d) == 10 and end_d.count("-") == 2:
+                end_d = end_d.replace("-", "")
+            start_d = start_date
+            if not start_d:
+                end_date_obj = date.today() if not end_date else date(
+                    int(end_d[:4]), int(end_d[4:6]), int(end_d[6:8])
+                )
+                start_date_obj = end_date_obj - timedelta(days=days)
+                start_d = start_date_obj.strftime("%Y%m%d")
+            elif len(start_d) == 10 and start_d.count("-") == 2:
+                start_d = start_d.replace("-", "")
+
+            code = str(stock_code).strip()
+            if not code.isdigit() or len(code) > 6:
+                logger.warning("[公告] 仅支持 A 股代码（如 600892、000001），当前: %s", stock_code)
+                return None
+
+            self._set_random_user_agent()
+            self._enforce_rate_limit()
+
+            import akshare as ak
+
+            logger.info(
+                "[API调用] ak.stock_zh_a_disclosure_report_cninfo(symbol=%s, start_date=%s, end_date=%s)",
+                code, start_d, end_d,
+            )
+            df = ak.stock_zh_a_disclosure_report_cninfo(
+                symbol=code,
+                market="沪深京",
+                keyword="",
+                category=category,
+                start_date=start_d,
+                end_date=end_d,
+            )
+            if df is None or df.empty:
+                logger.warning("[公告] 未获取到 %s 在 %s~%s 的公告", code, start_d, end_d)
+                return df if df is not None else pd.DataFrame()
+            logger.info("[API返回] 公告列表 共 %d 条", len(df))
+            return df
+        except Exception as e:
+            logger.warning("[公告] 获取 %s 公告失败: %s", stock_code, e)
+            return None
+
 
 if __name__ == "__main__":
     # 测试代码

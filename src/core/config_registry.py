@@ -218,19 +218,67 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "validation": {},
         "display_order": 10,
     },
-    "GEMINI_MODEL": {
-        "title": "Gemini Model",
-        "description": "Gemini model name.",
+    "LITELLM_MODEL": {
+        "title": "LiteLLM Primary Model",
+        "description": "Select model for analysis. Empty = auto-infer from API keys. AIHubmix users: use openai/* models; one key supports all listed models.",
         "category": "ai_model",
         "data_type": "string",
-        "ui_control": "text",
+        "ui_control": "select",
         "is_sensitive": False,
         "is_required": False,
         "is_editable": True,
-        "default_value": "gemini-3-flash-preview",
-        "options": [],
+        "default_value": "",
+        "options": [
+            "",
+            "openai/gpt-4o-free",
+            "openai/glm-5",
+            "openai/gpt-4o",
+            "openai/gpt-4o-mini",
+            "openai/gpt-4.1",
+            "openai/gemini-3.1-pro-preview",
+            "openai/gemini-3.1-flash-lite-preview",
+            "openai/gemini-3-flash-preview",
+            "openai/gemini-3-pro-preview",
+            "openai/gemini-2.5-pro",
+            "openai/gemini-2.5-flash",
+            "openai/gemini-2.0-flash",
+            "openai/claude-3-5-sonnet-20241022",
+            "openai/deepseek-chat",
+            "openai/deepseek-reasoner",
+            "anthropic/claude-3-5-sonnet-20241022",
+        ],
         "validation": {},
-        "display_order": 20,
+        "display_order": 15,
+    },
+    "LITELLM_RESTRUCTURING_MODEL": {
+        "title": "Restructuring Analysis Model",
+        "description": "Model for restructuring path analysis (long context). Empty = use primary model. Prefer large-context models (e.g. openai/gemini-3.1-pro-preview) when context is large.",
+        "category": "ai_model",
+        "data_type": "string",
+        "ui_control": "select",
+        "is_sensitive": False,
+        "is_required": False,
+        "is_editable": True,
+        "default_value": "",
+        "options": [
+            "",
+            "openai/gemini-3.1-pro-preview",
+            "openai/gemini-3.1-flash-lite-preview",
+            "openai/gemini-3-flash-preview",
+            "openai/gemini-3-pro-preview",
+            "openai/gemini-2.5-pro",
+            "openai/gemini-2.5-flash",
+            "openai/gpt-4o",
+            "openai/gpt-4o-mini",
+            "openai/gpt-4.1",
+            "openai/glm-5",
+            "openai/claude-3-5-sonnet-20241022",
+            "openai/deepseek-chat",
+            "openai/deepseek-reasoner",
+            "anthropic/claude-3-5-sonnet-20241022",
+        ],
+        "validation": {},
+        "display_order": 18,
     },
     "GEMINI_TEMPERATURE": {
         "title": "Gemini Temperature",
@@ -685,6 +733,12 @@ def get_field_definition(key: str, value_hint: Optional[str] = None) -> Dict[str
     if key_upper in _FIELD_DEFINITIONS:
         field = deepcopy(_FIELD_DEFINITIONS[key_upper])
         field["key"] = key_upper
+        # For LITELLM_MODEL / LITELLM_RESTRUCTURING_MODEL select: ensure current value appears in options if not in preset list
+        if key_upper in ("LITELLM_MODEL", "LITELLM_RESTRUCTURING_MODEL") and value_hint is not None:
+            opts = list(field.get("options") or [])
+            val = (value_hint or "").strip()
+            if val and val not in opts:
+                field["options"] = opts + [val]
         return field
 
     category = _infer_category(key_upper)
@@ -740,7 +794,7 @@ def _infer_category(key: str) -> str:
         return "base"
     if key.startswith("BACKTEST_"):
         return "backtest"
-    if key.startswith(("GEMINI_", "OPENAI_", "ANTHROPIC_")):
+    if key.startswith(("GEMINI_", "OPENAI_", "ANTHROPIC_", "LITELLM_")):
         return "ai_model"
     if key.endswith("_PRIORITY") or key.startswith(
         (

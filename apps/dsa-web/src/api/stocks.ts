@@ -5,7 +5,23 @@ export type ExtractFromImageResponse = {
   rawText?: string;
 };
 
+export type StockNamesResponse = {
+  names: Record<string, string>;
+};
+
 export const stocksApi = {
+  /**
+   * Batch get stock names for codes (e.g. for watchlist dropdown display).
+   */
+  async getNames(codes: string[]): Promise<Record<string, string>> {
+    if (!codes.length) return {};
+    const params = new URLSearchParams({ codes: codes.join(',') });
+    const response = await apiClient.get<StockNamesResponse>(
+      `/api/v1/stocks/names?${params.toString()}`
+    );
+    return response.data?.names ?? {};
+  },
+
   async extractFromImage(file: File): Promise<ExtractFromImageResponse> {
     const formData = new FormData();
     formData.append('file', file);

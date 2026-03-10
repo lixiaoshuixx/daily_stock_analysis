@@ -14,6 +14,10 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',  // 允许公网访问
     port: 5173,       // 默认端口
+    proxy: {
+      // 开发时把 /api 转发到后端，避免 405 和 CORS
+      '/api': { target: 'http://127.0.0.1:8000', changeOrigin: true },
+    },
   },
   build: {
     // 打包输出到项目根目录的 static 文件夹

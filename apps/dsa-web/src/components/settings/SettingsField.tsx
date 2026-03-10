@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type React from 'react';
 import { EyeToggleIcon, Select } from '../common';
 import type { ConfigValidationIssue, SystemConfigItem } from '../../types/systemConfig';
-import { getFieldDescriptionZh, getFieldTitleZh } from '../../utils/systemConfigI18n';
+import { getFieldDescriptionZh, getFieldTitleZh, getLiteLLMModelOptionLabel } from '../../utils/systemConfigI18n';
 
 function isMultiValueField(item: SystemConfigItem): boolean {
   const validation = (item.schema?.validation ?? {}) as Record<string, unknown>;
@@ -57,15 +57,22 @@ function renderFieldControl(
   }
 
   if (controlType === 'select' && schema?.options?.length) {
+    const options =
+      item.key === 'LITELLM_MODEL'
+        ? schema.options.map((option) => ({
+            value: option,
+            label: getLiteLLMModelOptionLabel(option),
+          }))
+        : schema.options.map((option) => ({ value: option, label: option }));
     return (
-        <Select
-          value={value}
-          onChange={onChange}
-          options={schema.options.map((option) => ({ value: option, label: option }))}
-          disabled={disabled || !schema.isEditable}
-          placeholder="请选择"
-        />
-      );
+      <Select
+        value={value}
+        onChange={onChange}
+        options={options}
+        disabled={disabled || !schema.isEditable}
+        placeholder="请选择"
+      />
+    );
   }
 
   if (controlType === 'switch') {

@@ -69,6 +69,7 @@ def parse_arguments() -> argparse.Namespace:
   python main.py --single-notify    # 启用单股推送模式（每分析完一只立即推送）
   python main.py --schedule         # 启用定时任务模式
   python main.py --market-review    # 仅运行大盘复盘
+  python main.py --restructuring --stocks 600519  # 重组路径与时间节点分析
         '''
     )
 
@@ -208,6 +209,13 @@ def parse_arguments() -> argparse.Namespace:
         '--backtest-force',
         action='store_true',
         help='强制回测（即使已有回测结果也重新计算）'
+    )
+
+    # === Restructuring analysis ===
+    parser.add_argument(
+        '--restructuring',
+        action='store_true',
+        help='运行重组路径与时间节点分析（需配合 --stocks 指定股票代码）'
     )
 
     return parser.parse_args()
@@ -592,6 +600,28 @@ def main() -> int:
                 f"回测完成: processed={stats.get('processed')} saved={stats.get('saved')} "
                 f"completed={stats.get('completed')} insufficient={stats.get('insufficient')} errors={stats.get('errors')}"
             )
+            return 0
+
+        # 模式0b: 重组路径与时间节点分析
+        if getattr(args, 'restructuring', False):
+            from src.services.restructuring_service import run_restructuring_analysis
+
+            codes = stock_codes or []
+            if not codes:
+                logger.warning("重组分析需指定股票代码，例如: python main.py --restructuring --stocks 600519")
+                return 1
+            for code in codes:
+                code = canonical_stock_code(code)
+                if not code:
+                    continue
+                logger.info("重组分析: %s", code)
+                out = run_restructuring_analysis(code=code, use_llm=True)
+                if out.get("success"):
+                    r = out.get("result") or {}
+                    logger.info("  摘要: %s", (r.get("summary") or "")[:200])
+                    logger.info("  分析ID: %s", out.get("analysis_id"))
+                else:
+                    logger.warning("  失败: %s", out.get("error", "unknown"))
             return 0
 
         # 模式1: 仅大盘复盘

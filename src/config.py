@@ -60,9 +60,10 @@ class Config:
     tushare_token: Optional[str] = None
     
     # === AI 分析配置 ===
-    # LiteLLM unified model config (provider/model format, e.g. gemini/gemini-2.5-flash)
+    # LiteLLM unified model config (provider/model format, e.g. openai/gpt-4o)
     litellm_model: str = ""  # Primary model; must include provider prefix when set explicitly
     litellm_fallback_models: List[str] = field(default_factory=list)  # Cross-model fallback list
+    litellm_restructuring_model: str = ""  # Optional: model for restructuring path analysis (long context); empty = use litellm_model
 
     # Multi-key support: each list is parsed from *_API_KEYS (comma-separated) with single-key fallback
     gemini_api_keys: List[str] = field(default_factory=list)
@@ -188,6 +189,9 @@ class Config:
 
     # 是否保存分析上下文快照（用于历史回溯）
     save_context_snapshot: bool = True
+
+    # 重组分析是否使用公告目录（先发目录给 LLM 识别重组相关，再抓取全文合并）
+    restructuring_use_announcements: bool = True
 
     # === 回测配置 ===
     backtest_enabled: bool = True
@@ -400,7 +404,12 @@ class Config:
             _gemini_model_name = os.getenv('GEMINI_MODEL', 'gemini-3-flash-preview').strip()
             _anthropic_model_name = os.getenv('ANTHROPIC_MODEL', 'claude-3-5-sonnet-20241022').strip()
             _openai_model_name = os.getenv('OPENAI_MODEL', 'gpt-4o-mini').strip()
-            if gemini_api_keys:
+            _vertex_project = os.getenv('VERTEX_PROJECT', '').strip()
+            _vertex_creds = os.getenv('GOOGLE_APPLICATION_CREDENTIALS', '').strip()
+            if _vertex_project or _vertex_creds:
+                _vertex_model = os.getenv('VERTEX_MODEL', 'gemini-1.5-pro').strip()
+                litellm_model = f'vertex_ai/{_vertex_model}'
+            elif gemini_api_keys:
                 litellm_model = f'gemini/{_gemini_model_name}'
             elif anthropic_api_keys:
                 litellm_model = f'anthropic/{_anthropic_model_name}'
@@ -410,6 +419,9 @@ class Config:
                     litellm_model = f'openai/{_openai_model_name}'
                 else:
                     litellm_model = _openai_model_name
+
+        # LITELLM_RESTRUCTURING_MODEL: optional model for restructuring path analysis (long context)
+        litellm_restructuring_model = os.getenv('LITELLM_RESTRUCTURING_MODEL', '').strip()
 
         # LITELLM_FALLBACK_MODELS: comma-separated list of fallback models
         _fallback_str = os.getenv('LITELLM_FALLBACK_MODELS', '')
@@ -424,18 +436,26 @@ class Config:
             else:
                 litellm_fallback_models = []
 
-        # 解析搜索引擎 API Keys（支持多个 key，逗号分隔）
+        # 解析搜索引擎 API Keys（支持多 key 逗号分隔，或单 key 的 _KEY 变量）
         bocha_keys_str = os.getenv('BOCHA_API_KEYS', '')
         bocha_api_keys = [k.strip() for k in bocha_keys_str.split(',') if k.strip()]
-        
+        if not bocha_api_keys and os.getenv('BOCHA_API_KEY', '').strip():
+            bocha_api_keys = [os.getenv('BOCHA_API_KEY', '').strip()]
+
         tavily_keys_str = os.getenv('TAVILY_API_KEYS', '')
         tavily_api_keys = [k.strip() for k in tavily_keys_str.split(',') if k.strip()]
-        
+        if not tavily_api_keys and os.getenv('TAVILY_API_KEY', '').strip():
+            tavily_api_keys = [os.getenv('TAVILY_API_KEY', '').strip()]
+
         serpapi_keys_str = os.getenv('SERPAPI_API_KEYS', '')
         serpapi_keys = [k.strip() for k in serpapi_keys_str.split(',') if k.strip()]
+        if not serpapi_keys and os.getenv('SERPAPI_API_KEY', '').strip():
+            serpapi_keys = [os.getenv('SERPAPI_API_KEY', '').strip()]
 
         brave_keys_str = os.getenv('BRAVE_API_KEYS', '')
         brave_api_keys = [k.strip() for k in brave_keys_str.split(',') if k.strip()]
+        if not brave_api_keys and os.getenv('BRAVE_API_KEY', '').strip():
+            brave_api_keys = [os.getenv('BRAVE_API_KEY', '').strip()]
 
         # 企微消息类型与最大字节数逻辑
         wechat_msg_type = os.getenv('WECHAT_MSG_TYPE', 'markdown')
@@ -455,6 +475,7 @@ class Config:
             tushare_token=os.getenv('TUSHARE_TOKEN'),
             litellm_model=litellm_model,
             litellm_fallback_models=litellm_fallback_models,
+            litellm_restructuring_model=litellm_restructuring_model,
             gemini_api_keys=gemini_api_keys,
             anthropic_api_keys=anthropic_api_keys,
             openai_api_keys=openai_api_keys,
@@ -532,6 +553,7 @@ class Config:
             markdown_to_image_max_chars=int(os.getenv('MARKDOWN_TO_IMAGE_MAX_CHARS', '15000')),
             database_path=os.getenv('DATABASE_PATH', './data/stock_analysis.db'),
             save_context_snapshot=os.getenv('SAVE_CONTEXT_SNAPSHOT', 'true').lower() == 'true',
+            restructuring_use_announcements=os.getenv('RESTRUCTURING_USE_ANNOUNCEMENTS', 'true').lower() == 'true',
             backtest_enabled=os.getenv('BACKTEST_ENABLED', 'true').lower() == 'true',
             backtest_eval_window_days=int(os.getenv('BACKTEST_EVAL_WINDOW_DAYS', '10')),
             backtest_min_age_days=int(os.getenv('BACKTEST_MIN_AGE_DAYS', '14')),

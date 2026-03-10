@@ -14,12 +14,15 @@
 3. 指数退避重试机制
 """
 
+import json
 import logging
 import random
 import time
 from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Optional, List, Tuple, Dict, Any
+from urllib.request import Request, urlopen
+from urllib.error import URLError
 
 import pandas as pd
 import numpy as np
@@ -91,6 +94,37 @@ def canonical_stock_code(code: str) -> str:
         'hk00700' -> 'HK00700'
     """
     return (code or "").strip().upper()
+
+
+def _fetch_ashare_names_eastmoney(codes: List[str]) -> Dict[str, str]:
+    """
+    Fetch A-share stock names from Eastmoney public API as fallback when no data provider returns names.
+    Only handles 6-digit A-share codes (60xxxx Shanghai, 00xxxx/30xxxx Shenzhen).
+    """
+    result = {}
+    for c in codes:
+        c = str(c).strip()
+        if not c.isdigit() or len(c) != 6:
+            continue
+        if c.startswith("6"):
+            secid = f"1.{c}"  # Shanghai
+        elif c.startswith(("0", "3")):
+            secid = f"0.{c}"  # Shenzhen
+        else:
+            continue
+        url = f"https://push2.eastmoney.com/api/qt/stock/get?secid={secid}&fields=f58"
+        try:
+            req = Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; StockNameResolve/1.0)"})
+            with urlopen(req, timeout=6) as resp:
+                raw = resp.read().decode("utf-8", errors="replace")
+            data = json.loads(raw)
+            name = (data.get("data") or {}).get("f58")
+            if name and isinstance(name, str):
+                result[c] = name.strip()
+        except (URLError, OSError, ValueError) as e:
+            logger.debug(f"[股票名称] Eastmoney fallback {c}: {e}")
+            continue
+    return result
 
 
 class DataFetchError(Exception):
@@ -889,64 +923,115 @@ class DataFetcherManager:
         logger.warning(f"[股票名称] 所有数据源都无法获取 {stock_code} 的名称")
         return ""
 
+    def get_stock_announcements(
+        self,
+        stock_code: str,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        days: int = 365,
+        category: str = "",
+    ):
+        """
+        Get A-share stock announcement list (disclosure directory) for the given date range.
+
+        Data source: CNINFO via Akshare (巨潮资讯). Only 沪深京 A-shares are supported.
+
+        Args:
+            stock_code: A-share code, e.g. '600892', '000001'.
+            start_date: Start date YYYYMMDD or YYYY-MM-DD. If None, use (end_date - days).
+            end_date: End date YYYYMMDD or YYYY-MM-DD. If None, use today.
+            days: Lookback days when start_date is None (default 365).
+            category: Optional category filter (e.g. '年报','业绩预告'). "" for all.
+
+        Returns:
+            pandas.DataFrame with columns 代码, 简称, 公告标题, 公告时间, 公告链接; or None.
+        """
+        stock_code = normalize_stock_code(stock_code)
+        code = str(stock_code).strip()
+        if not code.isdigit() or len(code) > 6:
+            logger.warning("[公告] 仅支持 A 股代码，当前: %s", stock_code)
+            return None
+        for fetcher in self._fetchers:
+            if hasattr(fetcher, "get_stock_announcements"):
+                try:
+                    df = fetcher.get_stock_announcements(
+                        stock_code=code,
+                        start_date=start_date,
+                        end_date=end_date,
+                        days=days,
+                        category=category,
+                    )
+                    if df is not None and not df.empty:
+                        return df
+                except Exception as e:
+                    logger.warning("[公告] %s 获取失败: %s", fetcher.name, e)
+        return None
+
     def batch_get_stock_names(self, stock_codes: List[str]) -> Dict[str, str]:
         """
         批量获取股票中文名称
         
         先尝试从支持批量查询的数据源获取股票列表，
         然后再逐个查询缺失的股票名称。
+        返回的 key 统一为规范化代码（strip + upper），便于前端下拉等按代码匹配。
         
         Args:
             stock_codes: 股票代码列表
             
         Returns:
-            {股票代码: 股票名称} 字典
+            {股票代码: 股票名称} 字典，key 为规范化后的代码
         """
+        normalized = [str(c).strip().upper() for c in stock_codes if c]
         result = {}
-        missing_codes = set(stock_codes)
-        
-        # 1. 先检查缓存
+        missing_codes = set(normalized)
         if not hasattr(self, '_stock_name_cache'):
             self._stock_name_cache = {}
-        
-        for code in stock_codes:
+
+        # 1. Check cache (use normalized keys)
+        for code in normalized:
             if code in self._stock_name_cache:
                 result[code] = self._stock_name_cache[code]
                 missing_codes.discard(code)
-        
         if not missing_codes:
             return result
-        
-        # 2. 尝试批量获取股票列表
+
+        # 2. Try batch from fetchers
         for fetcher in self._fetchers:
             if hasattr(fetcher, 'get_stock_list') and missing_codes:
                 try:
                     stock_list = fetcher.get_stock_list()
                     if stock_list is not None and not stock_list.empty:
                         for _, row in stock_list.iterrows():
-                            code = row.get('code')
+                            raw_code = row.get('code')
                             name = row.get('name')
+                            code = str(raw_code).strip().upper() if raw_code else ""
                             if code and name:
                                 self._stock_name_cache[code] = name
                                 if code in missing_codes:
                                     result[code] = name
                                     missing_codes.discard(code)
-                        
                         if not missing_codes:
                             break
-                        
                         logger.info(f"[股票名称] 从 {fetcher.name} 批量获取完成，剩余 {len(missing_codes)} 个待查")
                 except Exception as e:
                     logger.debug(f"[股票名称] {fetcher.name} 批量获取失败: {e}")
                     continue
-        
-        # 3. 逐个获取剩余的
+
+        # 3. Fill remaining one by one
         for code in list(missing_codes):
             name = self.get_stock_name(code)
             if name:
                 result[code] = name
                 missing_codes.discard(code)
-        
+        # 4. Fallback: Eastmoney public API for A-share names when no fetcher provided names
+        if missing_codes:
+            fallback_names = _fetch_ashare_names_eastmoney(list(missing_codes))
+            for code, name in fallback_names.items():
+                if name:
+                    result[code] = name
+                    self._stock_name_cache[code] = name
+                    missing_codes.discard(code)
+
         logger.info(f"[股票名称] 批量获取完成，成功 {len(result)}/{len(stock_codes)}")
         return result
 

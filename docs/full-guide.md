@@ -35,6 +35,7 @@ daily_stock_analysis/
 - [数据源配置](#数据源配置)
 - [高级功能](#高级功能)
 - [回测功能](#回测功能)
+- [重组路径与时间节点分析](#重组路径与时间节点分析)
 - [本地 WebUI 管理界面](#本地-webui-管理界面)
 
 ---
@@ -737,6 +738,44 @@ python main.py --debug
 | `avg_simulated_return_pct` | 平均模拟执行收益率（含止盈止损退出） |
 | `stop_loss_trigger_rate` | 止损触发率（仅统计配置了止损的记录） |
 | `take_profit_trigger_rate` | 止盈触发率（仅统计配置了止盈的记录） |
+
+---
+
+## 重组路径与时间节点分析
+
+本功能用于对单只股票进行**重组路径与时间节点**的梳理与验证：你可录入真实的重组消息与时间点，系统会整理并参与下次分析；每次分析结果会持久化，下次分析时可一并调用。
+
+### 使用方式
+
+1. **录入真实信息（可选）**：先通过 API 提交你掌握的重组消息与时间点（ground truth），便于后续分析时引用与校验。
+2. **执行分析**：对指定股票运行重组分析，系统会汇总该股已有 ground truth 与最近一次综合摘要，可选调用 LLM 生成路径摘要与时间线，并写入数据库。
+3. **查看历史**：通过 API 或再次分析时，系统会自动加载该股历史分析结果与 ground truth。
+
+### CLI
+
+```bash
+# 对指定股票运行重组分析（需先配置 LLM，见环境变量）
+python main.py --restructuring --stocks 600519
+```
+
+### API
+
+| 接口 | 方法 | 说明 |
+|------|------|------|
+| `/api/v1/restructuring/analyze` | POST | 对一只股票运行重组分析，返回分析 ID 与结果（含时间线） |
+| `/api/v1/restructuring/history` | GET | 列出分析记录，可选 `?code=600519` 按股票筛选 |
+| `/api/v1/restructuring/result/{analysis_id}` | GET | 获取单次分析的完整结果（含时间线） |
+| `/api/v1/restructuring/ground-truth` | POST/GET | 添加或列出用户提供的真实消息/时间点，GET 可选 `?code=600519` |
+
+请求体示例：
+
+- **POST /api/v1/restructuring/analyze**：`{"code": "600519", "name": "贵州茅台", "use_llm": true}`
+- **POST /api/v1/restructuring/ground-truth**：`{"code": "600519", "content": "2024年X月公告重组意向", "event_date": "2024-03-01", "source": "公告"}`
+
+### 数据说明
+
+- **分析结果**：包含 `summary`（摘要）、`path_description`（路径描述）、`timeline`（时间节点列表，含 `event_date`、`description`、`verified_by_user` 等）。
+- **Ground truth**：用户录入的内容会进入上下文，并在时间线中标记为 `verified_by_user=true`，与 LLM 推断节点区分。
 
 ---
 

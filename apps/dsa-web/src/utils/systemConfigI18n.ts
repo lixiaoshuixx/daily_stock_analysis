@@ -31,7 +31,8 @@ const fieldTitleMap: Record<string, string> = {
   REALTIME_SOURCE_PRIORITY: '实时数据源优先级',
   ENABLE_REALTIME_TECHNICAL_INDICATORS: '盘中实时技术面',
   GEMINI_API_KEY: 'Gemini API Key',
-  GEMINI_MODEL: 'Gemini 模型',
+  LITELLM_MODEL: '主模型（可选）',
+  LITELLM_RESTRUCTURING_MODEL: '重组分析模型',
   GEMINI_TEMPERATURE: 'Gemini 温度参数',
   OPENAI_API_KEY: 'OpenAI API Key',
   OPENAI_BASE_URL: 'OpenAI Base URL',
@@ -65,7 +66,8 @@ const fieldDescriptionMap: Record<string, string> = {
   REALTIME_SOURCE_PRIORITY: '按逗号分隔填写数据源调用优先级。',
   ENABLE_REALTIME_TECHNICAL_INDICATORS: '盘中分析时用实时价计算 MA5/MA10/MA20 与多头排列（Issue #234）；关闭则用昨日收盘。',
   GEMINI_API_KEY: '用于 Gemini 服务调用的密钥。',
-  GEMINI_MODEL: '设置 Gemini 分析模型名称。',
+  LITELLM_MODEL: '下拉选择分析所用模型；留空则根据已配置 API Key 自动推断。使用 AIHubmix 时选 openai/* 模型即可切换。',
+  LITELLM_RESTRUCTURING_MODEL: '重组路径分析专用模型；上下文较长时建议选大上下文模型（如 openai/gemini-3.1-pro-preview）。留空则使用主模型。',
   GEMINI_TEMPERATURE: '控制模型输出随机性，范围通常为 0.0 到 2.0。',
   OPENAI_API_KEY: '用于 OpenAI 兼容服务调用的密钥。',
   OPENAI_BASE_URL: 'OpenAI 兼容 API 地址，例如 https://api.deepseek.com/v1。',
@@ -104,4 +106,33 @@ export function getFieldTitleZh(key: string, fallback?: string): string {
 
 export function getFieldDescriptionZh(key: string, fallback?: string): string {
   return fieldDescriptionMap[key] || fallback || '';
+}
+
+/** Display label for LITELLM_MODEL select option value (empty = auto-infer). */
+const liteLLMModelOptionLabels: Record<string, string> = {
+  '': '留空（自动推断）',
+  'openai/gpt-4o-free': 'GPT-4o 免费 (aihubmix)',
+  'openai/glm-5': 'GLM-5 (aihubmix)',
+  'openai/gpt-4o': 'GPT-4o (aihubmix)',
+  'openai/gpt-4o-mini': 'GPT-4o Mini (aihubmix)',
+  'openai/gpt-4.1': 'GPT-4.1 (aihubmix)',
+  'openai/gemini-3.1-pro-preview': 'Gemini 3.1 Pro (aihubmix)',
+  'openai/gemini-3.1-flash-lite-preview': 'Gemini 3.1 Flash Lite (aihubmix)',
+  'openai/gemini-3-flash-preview': 'Gemini 3 Flash (aihubmix)',
+  'openai/gemini-3-pro-preview': 'Gemini 3 Pro (aihubmix)',
+  'openai/gemini-2.5-pro': 'Gemini 2.5 Pro (aihubmix)',
+  'openai/gemini-2.5-flash': 'Gemini 2.5 Flash (aihubmix)',
+  'openai/gemini-2.0-flash': 'Gemini 2.0 Flash (aihubmix)',
+  'openai/claude-3-5-sonnet-20241022': 'Claude 3.5 Sonnet (aihubmix)',
+  'openai/deepseek-chat': 'DeepSeek Chat (aihubmix)',
+  'openai/deepseek-reasoner': 'DeepSeek Reasoner (aihubmix)',
+  'gemini/gemini-3-flash-preview': 'Gemini 3 Flash (Google)',
+  'gemini/gemini-3-pro-preview': 'Gemini 3 Pro (Google)',
+  'gemini/gemini-2.5-flash': 'Gemini 2.5 Flash (Google)',
+  'gemini/gemini-2.0-flash': 'Gemini 2.0 Flash (Google)',
+  'anthropic/claude-3-5-sonnet-20241022': 'Claude 3.5 Sonnet (Anthropic)',
+};
+
+export function getLiteLLMModelOptionLabel(value: string): string {
+  return (liteLLMModelOptionLabels[value] ?? value) || '留空（自动推断）';
 }

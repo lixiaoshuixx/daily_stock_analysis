@@ -1185,7 +1185,46 @@ class SearchService:
             success=False,
             error_message="事件搜索失败"
         )
-    
+
+    def search_restructuring_intel(
+        self,
+        stock_code: str,
+        stock_name: str,
+        max_results: int = 10,
+        search_days: int = 30,
+    ) -> SearchResponse:
+        """
+        Search for restructuring-related info: type, counterparty, target assets,
+        and progress (planning, plan, shareholder meeting, regulatory approval, etc.).
+        Used by restructuring analysis to auto-fill context from data sources.
+        """
+        if self._is_foreign_stock(stock_code):
+            query = f"{stock_name} {stock_code} M&A restructuring acquisition plan approval"
+        else:
+            query = (
+                f"{stock_name} {stock_code} 重组 资产重组 预案 筹划 过会 证监会 "
+                "标的资产 交易对手 发行股份 资产置换"
+            )
+        logger.info(
+            "搜索重组相关资讯: %s(%s), query=%s, 近%d天",
+            stock_name, stock_code, query[:60], search_days,
+        )
+        days = min(max(search_days, 7), 90)
+        for provider in self._providers:
+            if not provider.is_available:
+                continue
+            response = provider.search(query, max_results=max_results, days=days)
+            if response.success and response.results:
+                logger.info("重组资讯搜索成功: %s, %d 条", provider.name, len(response.results))
+                return response
+        return SearchResponse(
+            query=query,
+            results=[],
+            provider="None",
+            success=False,
+            error_message="未配置搜索引擎或重组相关检索无结果",
+        )
+
     def search_comprehensive_intel(
         self,
         stock_code: str,

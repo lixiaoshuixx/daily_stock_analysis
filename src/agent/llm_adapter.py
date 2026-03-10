@@ -8,6 +8,7 @@ interface consumed by the AgentExecutor, via LiteLLM.
 
 import json
 import logging
+import os
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -52,6 +53,10 @@ _OPT_IN_THINKING_MODELS: Dict[str, dict] = {
     "deepseek-chat": {"thinking": {"type": "enabled"}},
 }
 
+# Gemini 3 thinking: thinking_level "high" = deep reasoning, "low" = fast (default in LiteLLM is minimal/low).
+# Pass via extra_body.generationConfig.thinkingConfig for LiteLLM -> Gemini API.
+_GEMINI3_THINKING_LEVEL = os.environ.get("GEMINI_THINKING_LEVEL", "").strip().lower() or "low"
+
 
 def _model_matches(model: str, entries: List[str]) -> bool:
     """Check if model name matches any entry (exact or prefix with version suffix)."""
@@ -84,11 +89,20 @@ def get_thinking_extra_body(model: str) -> Optional[dict]:
       Return None to avoid duplicate activation.
     - Opt-in models (_OPT_IN_THINKING_MODELS: deepseek-chat): Return the activation
       payload to explicitly enable thinking mode.
+    - Gemini 3 (gemini-3-flash-preview, gemini-3-pro-*): Return thinkingConfig so that
+      thinking_level can be set (e.g. GEMINI_THINKING_LEVEL=high for deep reasoning).
     - All other models: Return None (no thinking mode).
     """
     if _model_matches(model, _AUTO_THINKING_MODELS):
         return None
-    return _get_opt_in_payload(model, _OPT_IN_THINKING_MODELS)
+    opt_in = _get_opt_in_payload(model, _OPT_IN_THINKING_MODELS)
+    if opt_in is not None:
+        return opt_in
+    # Gemini 3: enable configurable thinking level (high = deep reasoning, low = fast).
+    if model and "gemini-3" in model.lower():
+        level = _GEMINI3_THINKING_LEVEL if _GEMINI3_THINKING_LEVEL in ("high", "low", "medium") else "low"
+        return {"generationConfig": {"thinkingConfig": {"thinkingLevel": level}}}
+    return None
 
 
 # ============================================================
@@ -111,9 +125,15 @@ class LLMToolAdapter:
         self._init_litellm()
 
     def _get_api_keys_for_model(self, model: str) -> List[str]:
-        """Return API keys for the given litellm model based on provider prefix."""
+        """Return API keys for the given litellm model based on provider prefix.
+        For vertex_ai/, no API key is used; return a sentinel if Vertex env is set.
+        """
         config = self._config
-        if model.startswith("gemini/") or model.startswith("vertex_ai/"):
+        if model.startswith("vertex_ai/"):
+            if os.getenv("GOOGLE_APPLICATION_CREDENTIALS") or os.getenv("VERTEX_PROJECT"):
+                return ["vertex"]
+            return []
+        if model.startswith("gemini/"):
             return [k for k in config.gemini_api_keys if k and len(k) >= 8]
         if model.startswith("anthropic/"):
             return [k for k in config.anthropic_api_keys if k and len(k) >= 8]
@@ -145,6 +165,9 @@ class LLMToolAdapter:
             return
 
         self._litellm_available = True
+        if litellm_model.startswith("vertex_ai/") and keys == ["vertex"]:
+            logger.info(f"Agent LLM: Vertex AI initialized (model={litellm_model})")
+            return
 
         if len(keys) > 1:
             extra_params = self._extra_litellm_params(litellm_model)
@@ -250,7 +273,7 @@ class LLMToolAdapter:
             response = self._router.completion(**call_kwargs)
         else:
             keys = self._get_api_keys_for_model(model)
-            if keys:
+            if keys and not model.startswith("vertex_ai/"):
                 call_kwargs["api_key"] = keys[0]
             call_kwargs.update(self._extra_litellm_params(model))
             response = litellm.completion(**call_kwargs)

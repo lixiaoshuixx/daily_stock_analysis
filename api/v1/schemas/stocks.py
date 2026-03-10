@@ -9,7 +9,7 @@
 2. 定义历史 K 线数据模型
 """
 
-from typing import Optional, List
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -74,6 +74,15 @@ class KLineData(BaseModel):
                 "change_percent": 0.84
             }
         }
+
+
+class StockNamesResponse(BaseModel):
+    """批量股票代码 -> 名称"""
+
+    names: Dict[str, str] = Field(..., description="股票代码到名称的映射，如 {\"600519\": \"贵州茅台\"}")
+
+    class Config:
+        json_schema_extra = {"example": {"names": {"600519": "贵州茅台", "300750": "宁德时代"}}}
 
 
 class ExtractFromImageResponse(BaseModel):

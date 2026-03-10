@@ -15,10 +15,13 @@ from typing import Optional
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 
+from data_provider.base import DataFetcherManager
+
 from api.v1.schemas.stocks import (
     ExtractFromImageResponse,
     KLineData,
     StockHistoryResponse,
+    StockNamesResponse,
     StockQuote,
 )
 from api.v1.schemas.common import ErrorResponse
@@ -107,6 +110,28 @@ def extract_from_image(
             status_code=500,
             detail={"error": "internal_error", "message": "图片提取失败"},
         )
+
+
+@router.get(
+    "/names",
+    response_model=StockNamesResponse,
+    summary="批量获取股票名称",
+    description="根据股票代码列表返回代码到名称的映射，用于自选股等下拉展示。",
+)
+def get_stock_names(codes: str = Query(..., description="逗号分隔的股票代码，如 600519,300750")) -> StockNamesResponse:
+    """Batch resolve stock codes to names. Keys in response match requested codes (normalized)."""
+    code_list = [c.strip().upper() for c in codes.split(",") if c.strip()]
+    if not code_list:
+        return StockNamesResponse(names={})
+    try:
+        manager = DataFetcherManager()
+        names = manager.batch_get_stock_names(code_list)
+        # Ensure response keys exactly match requested codes for frontend dropdown lookup
+        normalized_names = {c: (names.get(c) or "") for c in code_list}
+        return StockNamesResponse(names=normalized_names)
+    except Exception as e:
+        logger.warning(f"Batch get stock names failed: {e}")
+        return StockNamesResponse(names={c: "" for c in code_list})
 
 
 @router.get(

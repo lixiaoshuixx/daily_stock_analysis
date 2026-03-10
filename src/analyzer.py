@@ -535,8 +535,15 @@ class GeminiAnalyzer:
 
     @staticmethod
     def _get_api_keys_for_model(model: str, config: Config) -> List[str]:
-        """Return API keys for a litellm model based on provider prefix."""
-        if model.startswith("gemini/") or model.startswith("vertex_ai/"):
+        """Return API keys for a litellm model based on provider prefix.
+        For vertex_ai/, no API key is used; return a sentinel if Vertex env is set.
+        """
+        if model.startswith("vertex_ai/"):
+            import os
+            if os.getenv("GOOGLE_APPLICATION_CREDENTIALS") or os.getenv("VERTEX_PROJECT"):
+                return ["vertex"]  # Sentinel: Vertex uses ADC, no api_key
+            return []
+        if model.startswith("gemini/"):
             return [k for k in config.gemini_api_keys if k and len(k) >= 8]
         if model.startswith("anthropic/"):
             return [k for k in config.anthropic_api_keys if k and len(k) >= 8]
@@ -567,6 +574,10 @@ class GeminiAnalyzer:
             return
 
         self._litellm_available = True
+        # Vertex AI uses ADC; single "vertex" sentinel -> no Router, no api_key in calls
+        if litellm_model.startswith("vertex_ai/") and keys == ["vertex"]:
+            logger.info(f"Analyzer LLM: Vertex AI initialized (model={litellm_model})")
+            return
 
         if len(keys) > 1:
             extra_params = self._extra_litellm_params(litellm_model, config)
@@ -595,12 +606,15 @@ class GeminiAnalyzer:
         """Check if LiteLLM is properly configured with at least one API key."""
         return self._router is not None or self._litellm_available
 
-    def _call_litellm(self, prompt: str, generation_config: dict) -> str:
+    def _call_litellm(
+        self, prompt: str, generation_config: dict, model_override: Optional[str] = None
+    ) -> str:
         """Call LLM via litellm with fallback across configured models.
 
         Args:
             prompt: User prompt text.
             generation_config: Dict with optional keys: temperature, max_output_tokens, max_tokens.
+            model_override: If set, try this model first (e.g. for restructuring long-context analysis).
 
         Returns:
             Response text from LLM.
@@ -613,8 +627,11 @@ class GeminiAnalyzer:
         )
         temperature = generation_config.get('temperature', 0.7)
 
-        models_to_try = [config.litellm_model] + (config.litellm_fallback_models or [])
-        models_to_try = [m for m in models_to_try if m]
+        base_models = [config.litellm_model] + (config.litellm_fallback_models or [])
+        if model_override and model_override.strip():
+            models_to_try = [model_override.strip()] + [m for m in base_models if m and m != model_override.strip()]
+        else:
+            models_to_try = [m for m in base_models if m]
 
         last_error = None
         for model in models_to_try:
@@ -640,7 +657,8 @@ class GeminiAnalyzer:
                 if self._router and model == config.litellm_model:
                     response = self._router.completion(**call_kwargs)
                 else:
-                    call_kwargs["api_key"] = keys[0]
+                    if not model.startswith("vertex_ai/"):
+                        call_kwargs["api_key"] = keys[0]
                     call_kwargs.update(self._extra_litellm_params(model, config))
                     response = litellm.completion(**call_kwargs)
 
