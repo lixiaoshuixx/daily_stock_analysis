@@ -13,6 +13,7 @@ WebUI 启动脚本
 Usage:
   python webui.py
   WEBUI_HOST=0.0.0.0 WEBUI_PORT=8000 python webui.py
+  WEBUI_RELOAD=1 python webui.py   # 开发模式：改代码后自动重启，无需手动杀进程
 """
 
 from __future__ import annotations
@@ -30,9 +31,12 @@ def main() -> int:
     # 兼容旧版环境变量名
     host = os.getenv("WEBUI_HOST", os.getenv("API_HOST", "127.0.0.1"))
     port = int(os.getenv("WEBUI_PORT", os.getenv("API_PORT", "8000")))
+    reload = os.getenv("WEBUI_RELOAD", "").strip().lower() in ("1", "true", "yes")
 
     print(f"正在启动 Web 服务: http://{host}:{port}")
     print(f"API 文档: http://{host}:{port}/docs")
+    if reload:
+        print("开发模式: WEBUI_RELOAD=1，修改代码后将自动重启")
     print()
 
     try:
@@ -48,6 +52,7 @@ def main() -> int:
             host=host,
             port=port,
             log_level="info",
+            reload=reload,
         )
     except KeyboardInterrupt:
         pass
