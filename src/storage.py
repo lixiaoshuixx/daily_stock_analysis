@@ -378,6 +378,58 @@ class ConversationMessage(Base):
     created_at = Column(DateTime, default=datetime.now, index=True)
 
 
+# === Restructuring (reorganization) analysis extension ===
+
+
+class RestructuringAnalysis(Base):
+    """
+    One record per restructuring analysis run for a stock.
+    Stores the overall path summary and links to timeline nodes.
+    """
+    __tablename__ = 'restructuring_analysis'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    code = Column(String(10), nullable=False, index=True)
+    name = Column(String(100))
+    summary = Column(Text)  # Overall path summary (e.g. LLM or template output)
+    path_description = Column(Text)  # Structured or narrative path
+    raw_context = Column(Text)  # Optional: news/snippets used for this run
+    created_at = Column(DateTime, default=datetime.now, index=True)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class RestructuringTimelineNode(Base):
+    """
+    A single time node in a restructuring path (e.g. plan date, approval date).
+    May be system-extracted or user-verified.
+    """
+    __tablename__ = 'restructuring_timeline'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    analysis_id = Column(Integer, ForeignKey('restructuring_analysis.id'), nullable=False, index=True)
+    event_type = Column(String(64), index=True)  # e.g. plan_announce, approval, completion
+    event_date = Column(Date, index=True)
+    description = Column(Text)
+    source = Column(String(255))  # e.g. announcement URL or "user"
+    verified_by_user = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.now)
+
+
+class RestructuringGroundTruth(Base):
+    """
+    User-provided restructuring messages and time points for verification.
+    Used to cross-check and validate system analysis.
+    """
+    __tablename__ = 'restructuring_ground_truth'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    code = Column(String(10), nullable=False, index=True)
+    content = Column(Text, nullable=False)  # Message or fact description
+    event_date = Column(Date, index=True)  # Optional time point
+    source = Column(String(255))  # e.g. "internal", "announcement"
+    created_at = Column(DateTime, default=datetime.now, index=True)
+
+
 class DatabaseManager:
     """
     数据库管理器 - 单例模式
@@ -818,7 +870,103 @@ class DatabaseManager:
             ).scalars().all()
 
             return list(results)
-    
+
+    def prune_analysis_history_for_code(self, code: str, keep_per_code: int = 1) -> int:
+        """
+        For the given stock code, keep only the latest `keep_per_code` analysis records; delete the rest.
+        Deletes dependent backtest_results first, then analysis_history rows.
+        Returns the number of analysis_history records deleted.
+        """
+        with self.session_scope() as session:
+            kept = session.execute(
+                select(AnalysisHistory.id)
+                .where(AnalysisHistory.code == code)
+                .order_by(desc(AnalysisHistory.created_at))
+                .limit(keep_per_code)
+            ).scalars().all()
+            kept_ids = {r[0] for r in kept}
+            all_for_code = session.execute(
+                select(AnalysisHistory.id).where(AnalysisHistory.code == code)
+            ).scalars().all()
+            ids_to_delete = [r[0] for r in all_for_code if r[0] not in kept_ids]
+            if not ids_to_delete:
+                return 0
+            session.execute(
+                delete(BacktestResult).where(
+                    BacktestResult.analysis_history_id.in_(ids_to_delete)
+                )
+            )
+            result = session.execute(
+                delete(AnalysisHistory).where(AnalysisHistory.id.in_(ids_to_delete))
+            )
+            return result.rowcount
+
+    def delete_analysis_history_for_codes(self, codes: List[str]) -> int:
+        """
+        Delete ALL analysis history records for the given stock codes (so only new runs will appear).
+        Returns the number of records deleted.
+        """
+        if not codes:
+            return 0
+        codes = list(dict.fromkeys(c.strip().upper() for c in codes if (c or "").strip()))
+        if not codes:
+            return 0
+        with self.session_scope() as session:
+            ids_to_delete = [
+                r[0]
+                for r in session.execute(
+                    select(AnalysisHistory.id).where(AnalysisHistory.code.in_(codes))
+                ).scalars().all()
+            ]
+            if not ids_to_delete:
+                return 0
+            session.execute(
+                delete(BacktestResult).where(
+                    BacktestResult.analysis_history_id.in_(ids_to_delete)
+                )
+            )
+            result = session.execute(
+                delete(AnalysisHistory).where(AnalysisHistory.id.in_(ids_to_delete))
+            )
+            return result.rowcount
+
+    def prune_analysis_history_keep_latest_all_codes(self, keep_per_code: int = 1) -> int:
+        """
+        For every stock code in analysis_history, keep only the latest keep_per_code record(s); delete the rest.
+        Returns the total number of analysis_history records deleted.
+        """
+        with self.session_scope() as session:
+            codes_result = session.execute(
+                select(AnalysisHistory.code).distinct()
+            ).scalars().all()
+            codes = [r[0] for r in codes_result]
+            ids_to_delete: List[int] = []
+            for code in codes:
+                kept = session.execute(
+                    select(AnalysisHistory.id)
+                    .where(AnalysisHistory.code == code)
+                    .order_by(desc(AnalysisHistory.created_at))
+                    .limit(keep_per_code)
+                ).scalars().all()
+                kept_ids = {r[0] for r in kept}
+                all_for_code = session.execute(
+                    select(AnalysisHistory.id).where(AnalysisHistory.code == code)
+                ).scalars().all()
+                for r in all_for_code:
+                    if r[0] not in kept_ids:
+                        ids_to_delete.append(r[0])
+            if not ids_to_delete:
+                return 0
+            session.execute(
+                delete(BacktestResult).where(
+                    BacktestResult.analysis_history_id.in_(ids_to_delete)
+                )
+            )
+            result = session.execute(
+                delete(AnalysisHistory).where(AnalysisHistory.id.in_(ids_to_delete))
+            )
+            return result.rowcount
+
     def get_analysis_history_paginated(
         self,
         code: Optional[str] = None,
@@ -1447,6 +1595,225 @@ class DatabaseManager:
                 )
             )
             return result.rowcount
+
+    # --- Restructuring analysis ---
+
+    def save_restructuring_analysis(
+        self,
+        code: str,
+        name: Optional[str] = None,
+        summary: Optional[str] = None,
+        path_description: Optional[str] = None,
+        raw_context: Optional[str] = None,
+        timeline_nodes: Optional[List[Dict[str, Any]]] = None,
+    ) -> int:
+        """
+        Save one restructuring analysis run and optional timeline nodes.
+        Returns the analysis id.
+        """
+        with self.session_scope() as session:
+            rec = RestructuringAnalysis(
+                code=code,
+                name=name,
+                summary=summary,
+                path_description=path_description,
+                raw_context=raw_context,
+            )
+            session.add(rec)
+            session.flush()
+            aid = rec.id
+            if timeline_nodes:
+                for node in timeline_nodes:
+                    n = RestructuringTimelineNode(
+                        analysis_id=aid,
+                        event_type=node.get("event_type"),
+                        event_date=node.get("event_date"),
+                        description=node.get("description"),
+                        source=node.get("source", "system"),
+                        verified_by_user=node.get("verified_by_user", False),
+                    )
+                    session.add(n)
+            return aid
+
+    def prune_restructuring_analyses_for_code(
+        self, code: str, keep_per_code: int = 1
+    ) -> int:
+        """
+        For the given stock code, keep only the latest `keep_per_code` analyses; delete the rest.
+        Returns the number of analysis records deleted.
+        """
+        with self.session_scope() as session:
+            kept = session.execute(
+                select(RestructuringAnalysis.id)
+                .where(RestructuringAnalysis.code == code)
+                .order_by(desc(RestructuringAnalysis.created_at))
+                .limit(keep_per_code)
+            ).scalars().all()
+            kept_ids = {r[0] for r in kept}
+            all_for_code = session.execute(
+                select(RestructuringAnalysis.id).where(RestructuringAnalysis.code == code)
+            ).scalars().all()
+            ids_to_delete = [r[0] for r in all_for_code if r[0] not in kept_ids]
+            if not ids_to_delete:
+                return 0
+            session.execute(
+                delete(RestructuringTimelineNode).where(
+                    RestructuringTimelineNode.analysis_id.in_(ids_to_delete)
+                )
+            )
+            result = session.execute(
+                delete(RestructuringAnalysis).where(
+                    RestructuringAnalysis.id.in_(ids_to_delete)
+                )
+            )
+            return result.rowcount
+
+    def prune_restructuring_analyses_keep_latest_per_code(
+        self, keep_per_code: int = 10
+    ) -> int:
+        """
+        Keep only the latest `keep_per_code` analyses per stock code; delete the rest.
+        Deletes timeline nodes for removed analyses first, then analysis rows.
+        Returns the number of analysis records deleted.
+        """
+        with self.session_scope() as session:
+            # Get distinct codes
+            codes_result = session.execute(
+                select(RestructuringAnalysis.code).distinct()
+            ).scalars().all()
+            codes = [r[0] for r in codes_result]
+            ids_to_delete: List[int] = []
+            for c in codes:
+                # For this code: get ids ordered by created_at desc, keep first keep_per_code
+                kept = session.execute(
+                    select(RestructuringAnalysis.id)
+                    .where(RestructuringAnalysis.code == c)
+                    .order_by(desc(RestructuringAnalysis.created_at))
+                    .limit(keep_per_code)
+                ).scalars().all()
+                kept_ids = {r[0] for r in kept}
+                all_for_code = session.execute(
+                    select(RestructuringAnalysis.id).where(
+                        RestructuringAnalysis.code == c
+                    )
+                ).scalars().all()
+                for r in all_for_code:
+                    if r[0] not in kept_ids:
+                        ids_to_delete.append(r[0])
+            if not ids_to_delete:
+                return 0
+            # Delete timeline nodes for analyses we are removing
+            session.execute(
+                delete(RestructuringTimelineNode).where(
+                    RestructuringTimelineNode.analysis_id.in_(ids_to_delete)
+                )
+            )
+            # Delete analysis rows
+            result = session.execute(
+                delete(RestructuringAnalysis).where(
+                    RestructuringAnalysis.id.in_(ids_to_delete)
+                )
+            )
+            return result.rowcount
+
+    def get_restructuring_analyses(
+        self, code: Optional[str] = None, limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        """List restructuring analyses, optionally by stock code. Newest first."""
+        with self.get_session() as session:
+            q = select(RestructuringAnalysis).order_by(
+                desc(RestructuringAnalysis.created_at)
+            ).limit(limit)
+            if code:
+                q = q.where(RestructuringAnalysis.code == code)
+            rows = session.execute(q).scalars().all()
+            return [
+                {
+                    "id": r.id,
+                    "code": r.code,
+                    "name": r.name,
+                    "summary": r.summary,
+                    "path_description": r.path_description,
+                    "created_at": r.created_at.isoformat() if r.created_at else None,
+                }
+                for r in rows
+            ]
+
+    def get_restructuring_analysis_with_timeline(
+        self, analysis_id: int
+    ) -> Optional[Dict[str, Any]]:
+        """Get one analysis and its timeline nodes."""
+        with self.get_session() as session:
+            r = session.get(RestructuringAnalysis, analysis_id)
+            if not r:
+                return None
+            nodes = session.execute(
+                select(RestructuringTimelineNode).where(
+                    RestructuringTimelineNode.analysis_id == analysis_id
+                ).order_by(RestructuringTimelineNode.event_date)
+            ).scalars().all()
+            return {
+                "id": r.id,
+                "code": r.code,
+                "name": r.name,
+                "summary": r.summary,
+                "path_description": r.path_description,
+                "raw_context": r.raw_context,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+                "timeline": [
+                    {
+                        "id": n.id,
+                        "event_type": n.event_type,
+                        "event_date": n.event_date.isoformat() if n.event_date else None,
+                        "description": n.description,
+                        "source": n.source,
+                        "verified_by_user": n.verified_by_user,
+                    }
+                    for n in nodes
+                ],
+            }
+
+    def add_restructuring_ground_truth(
+        self,
+        code: str,
+        content: str,
+        event_date: Optional[date] = None,
+        source: Optional[str] = None,
+    ) -> int:
+        """Add a user-provided ground-truth message/time point. Returns new row id."""
+        with self.session_scope() as session:
+            rec = RestructuringGroundTruth(
+                code=code,
+                content=content,
+                event_date=event_date,
+                source=source or "user",
+            )
+            session.add(rec)
+            session.flush()
+            return rec.id
+
+    def get_restructuring_ground_truth(
+        self, code: Optional[str] = None, limit: int = 200
+    ) -> List[Dict[str, Any]]:
+        """List ground-truth entries, optionally by stock code."""
+        with self.get_session() as session:
+            q = select(RestructuringGroundTruth).order_by(
+                desc(RestructuringGroundTruth.created_at)
+            ).limit(limit)
+            if code:
+                q = q.where(RestructuringGroundTruth.code == code)
+            rows = session.execute(q).scalars().all()
+            return [
+                {
+                    "id": r.id,
+                    "code": r.code,
+                    "content": r.content,
+                    "event_date": r.event_date.isoformat() if r.event_date else None,
+                    "source": r.source,
+                    "created_at": r.created_at.isoformat() if r.created_at else None,
+                }
+                for r in rows
+            ]
 
 
 # 便捷函数
