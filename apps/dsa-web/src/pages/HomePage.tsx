@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import type { HistoryItem, AnalysisReport, TaskInfo } from '../types/analysis';
 import { historyApi } from '../api/history';
 import { analysisApi, DuplicateTaskError } from '../api/analysis';
+import { systemConfigApi } from '../api/systemConfig';
 import { validateStockCode } from '../utils/validation';
 import { getRecentStartDate, getTodayInShanghai } from '../utils/format';
 import { useAnalysisStore } from '../stores/analysisStore';
@@ -41,6 +42,10 @@ const HomePage: React.FC = () => {
   const [activeTasks, setActiveTasks] = useState<TaskInfo[]>([]);
   const [duplicateError, setDuplicateError] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  // 后台配置的自选股（STOCK_LIST），用于「实时运行（仅保留最新）」全量分析
+  const [configuredStockCodes, setConfiguredStockCodes] = useState<string[]>([]);
+  const [isLoadingConfig, setIsLoadingConfig] = useState(false);
 
   // 用于跟踪当前分析请求，避免竞态条件
   const analysisRequestIdRef = useRef<number>(0);
@@ -219,8 +224,8 @@ const HomePage: React.FC = () => {
     }
   };
 
-  // 分析股票（异步模式）
-  const handleAnalyze = async () => {
+  // 分析股票（异步模式）。keepLatestOnly：完成后仅保留该股票最新一条历史记录
+  const handleAnalyze = async (keepLatestOnly = false) => {
     const { valid, message, normalized } = validateStockCode(stockCode);
     if (!valid) {
       setInputError(message);
@@ -241,6 +246,7 @@ const HomePage: React.FC = () => {
       const response = await analysisApi.analyzeAsync({
         stockCode: normalized,
         reportType: 'detailed',
+        keepLatestOnly,
       });
 
       // 清空输入框
@@ -272,6 +278,81 @@ const HomePage: React.FC = () => {
       handleAnalyze();
     }
   };
+
+  // 对后台配置的所有自选股运行分析，每只股票仅保留最新一条历史记录
+  const handleRunAllKeepLatest = async () => {
+    if (configuredStockCodes.length === 0) {
+      setStoreError('请先在设置中配置自选股列表（STOCK_LIST）');
+      return;
+    }
+    setDuplicateError(null);
+    setStoreError(null);
+    setIsAnalyzing(true);
+    setLoading(true);
+    let submitted = 0;
+    try {
+      // 先删除「本次要分析的股票」的全部历史，这样列表里不会再看得到昨天的记录，只会有本次运行产生的新记录
+      try {
+        const pruneRes = await analysisApi.pruneHistory({ codes: configuredStockCodes });
+        if (pruneRes.deleted > 0) {
+          setStoreError(null);
+        }
+        await fetchHistory(true, true, false);
+      } catch (e) {
+        console.error('Prune history failed:', e);
+        setStoreError(e instanceof Error ? e.message : '清理历史失败，请重试');
+      }
+      for (const code of configuredStockCodes) {
+        try {
+          await analysisApi.analyzeAsync({
+            stockCode: code,
+            reportType: 'detailed',
+            keepLatestOnly: true,
+          });
+          submitted += 1;
+        } catch (err) {
+          if (err instanceof DuplicateTaskError) {
+            // 该股已在队列中，跳过
+            continue;
+          }
+          console.error(`Analysis submit failed for ${code}:`, err);
+          setStoreError(err instanceof Error ? err.message : `提交 ${code} 失败`);
+        }
+      }
+      if (submitted > 0) {
+        setDuplicateError(null);
+      }
+    } finally {
+      setIsAnalyzing(false);
+      setLoading(false);
+    }
+  };
+
+  // 加载后台配置的自选股列表（STOCK_LIST）
+  useEffect(() => {
+    let cancelled = false;
+    setIsLoadingConfig(true);
+    systemConfigApi
+      .getConfig(false)
+      .then((res) => {
+        if (cancelled) return;
+        const item = res.items?.find((i) => i.key === 'STOCK_LIST');
+        const raw = (item?.value ?? '').trim();
+        const codes = raw
+          ? raw.split(/[,，\s]+/).map((c) => c.trim().toUpperCase()).filter(Boolean)
+          : [];
+        setConfiguredStockCodes(codes);
+      })
+      .catch(() => {
+        if (!cancelled) setConfiguredStockCodes([]);
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoadingConfig(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const sidebarContent = (
     <div className="flex flex-col gap-3 overflow-hidden min-h-0 h-full">
@@ -331,7 +412,7 @@ const HomePage: React.FC = () => {
           </div>
           <button
             type="button"
-            onClick={handleAnalyze}
+            onClick={() => handleAnalyze(false)}
             disabled={!stockCode || isAnalyzing}
             className="btn-primary flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
           >
@@ -345,6 +426,25 @@ const HomePage: React.FC = () => {
               </>
             ) : (
               '分析'
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={handleRunAllKeepLatest}
+            disabled={configuredStockCodes.length === 0 || isAnalyzing || isLoadingConfig}
+            title="对后台配置的所有自选股（STOCK_LIST）运行分析，每只股票仅保留最新一条历史记录"
+            className="btn-secondary flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 text-xs"
+          >
+            {isAnalyzing ? (
+              <>
+                <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                </svg>
+                提交中…
+              </>
+            ) : (
+              '实时运行（仅保留最新）'
             )}
           </button>
         </div>

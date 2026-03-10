@@ -43,7 +43,7 @@ class TaskStatus(str, Enum):
 class TaskInfo:
     """
     任务信息数据类
-    
+
     包含任务的完整状态信息，用于 API 响应和内部管理
     """
     task_id: str
@@ -55,10 +55,11 @@ class TaskInfo:
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
     report_type: str = "detailed"
+    keep_latest_only: bool = False
     created_at: datetime = field(default_factory=datetime.now)
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典，用于 API 响应"""
         return {
@@ -87,6 +88,7 @@ class TaskInfo:
             result=self.result,
             error=self.error,
             report_type=self.report_type,
+            keep_latest_only=self.keep_latest_only,
             created_at=self.created_at,
             started_at=self.started_at,
             completed_at=self.completed_at,
@@ -201,19 +203,21 @@ class AnalysisTaskQueue:
         stock_name: Optional[str] = None,
         report_type: str = "detailed",
         force_refresh: bool = False,
+        keep_latest_only: bool = False,
     ) -> TaskInfo:
         """
         提交分析任务
-        
+
         Args:
             stock_code: 股票代码
             stock_name: 股票名称（可选）
             report_type: 报告类型
             force_refresh: 是否强制刷新
-            
+            keep_latest_only: 完成后是否仅保留该股票最新一条历史记录
+
         Returns:
             TaskInfo: 任务信息
-            
+
         Raises:
             DuplicateTaskError: 股票正在分析中
         """
@@ -223,7 +227,7 @@ class AnalysisTaskQueue:
             if stock_code in self._analyzing_stocks:
                 existing_task_id = self._analyzing_stocks[stock_code]
                 raise DuplicateTaskError(stock_code, existing_task_id)
-            
+
             # 创建任务
             task_id = uuid.uuid4().hex
             task_info = TaskInfo(
@@ -233,12 +237,13 @@ class AnalysisTaskQueue:
                 status=TaskStatus.PENDING,
                 message="任务已加入队列",
                 report_type=report_type,
+                keep_latest_only=keep_latest_only,
             )
-            
+
             # 注册任务
             self._tasks[task_id] = task_info
             self._analyzing_stocks[stock_code] = task_id
-            
+
             # 提交到线程池执行
             future = self.executor.submit(
                 self._execute_task,
@@ -246,6 +251,7 @@ class AnalysisTaskQueue:
                 stock_code,
                 report_type,
                 force_refresh,
+                keep_latest_only,
             )
             self._futures[task_id] = future
             
@@ -328,16 +334,18 @@ class AnalysisTaskQueue:
         stock_code: str,
         report_type: str,
         force_refresh: bool,
+        keep_latest_only: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """
         执行分析任务（在线程池中运行）
-        
+
         Args:
             task_id: 任务 ID
             stock_code: 股票代码
             report_type: 报告类型
             force_refresh: 是否强制刷新
-            
+            keep_latest_only: 完成后是否仅保留该股票最新一条历史记录
+
         Returns:
             分析结果字典
         """
@@ -367,6 +375,21 @@ class AnalysisTaskQueue:
             )
             
             if result:
+                # If keep_latest_only: prune analysis history BEFORE broadcasting so frontend refetch sees pruned list
+                if keep_latest_only:
+                    try:
+                        from src.storage import get_db
+                        db = get_db()
+                        deleted = db.prune_analysis_history_for_code(stock_code, keep_per_code=1)
+                        if deleted:
+                            logger.info(
+                                "[TaskQueue] 仅保留最新: %s 已删除 %d 条旧分析记录",
+                                stock_code,
+                                deleted,
+                            )
+                    except Exception as e:
+                        logger.debug("[TaskQueue] 仅保留最新修剪失败(非致命): %s", e)
+
                 # 更新任务状态为完成
                 with self._data_lock:
                     task = self._tasks.get(task_id)
@@ -377,17 +400,17 @@ class AnalysisTaskQueue:
                         task.result = result
                         task.message = "分析完成"
                         task.stock_name = result.get("stock_name", task.stock_name)
-                        
+
                         # 从分析中集合移除
                         if task.stock_code in self._analyzing_stocks:
                             del self._analyzing_stocks[task.stock_code]
-                
+
                 self._broadcast_event("task_completed", task.to_dict())
                 logger.info(f"[TaskQueue] 任务完成: {task_id} ({stock_code})")
-                
+
                 # 清理过期任务
                 self._cleanup_old_tasks()
-                
+
                 return result
             else:
                 # 分析返回空结果

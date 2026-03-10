@@ -10,6 +10,8 @@ export interface AnalysisRequest {
   reportType?: 'simple' | 'detailed';
   forceRefresh?: boolean;
   asyncMode?: boolean;
+  /** When true, after analysis completes only the latest history record for this stock is kept */
+  keepLatestOnly?: boolean;
 }
 
 // ============ 报告类型 ============

@@ -45,13 +45,23 @@ export const analysisApi = {
    * @param data 分析请求参数
    * @returns 任务接受响应或抛出 409 错误
    */
+  /**
+   * 修剪历史。若传入 codes：删除这些股票的全部历史（运行后只会有新记录）；不传则全表每只股票仅保留最新一条。
+   */
+  pruneHistory: async (params?: { codes?: string[] }): Promise<{ deleted: number }> => {
+    const body = params?.codes?.length ? { codes: params.codes } : {};
+    const response = await apiClient.post<Record<string, unknown>>('/api/v1/analysis/prune-history', body);
+    return toCamelCase<{ deleted: number }>(response.data);
+  },
+
   analyzeAsync: async (data: AnalysisRequest): Promise<{ taskId: string; status: string; message?: string }> => {
-    const requestData = {
+    const requestData: Record<string, unknown> = {
       stock_code: data.stockCode,
       report_type: data.reportType || 'detailed',
       force_refresh: data.forceRefresh || false,
       async_mode: true,
     };
+    if (data.keepLatestOnly != null) requestData.keep_latest_only = data.keepLatestOnly;
 
     const response = await apiClient.post<Record<string, unknown>>(
       '/api/v1/analysis/analyze',

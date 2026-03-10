@@ -50,7 +50,11 @@ class AnalyzeRequest(BaseModel):
         False,
         description="是否使用异步模式"
     )
-    
+    keep_latest_only: bool = Field(
+        False,
+        description="若为 True，分析完成后仅保留该股票最新一条历史记录，删除更早记录"
+    )
+
     class Config:
         json_schema_extra = {
             "example": {
@@ -60,6 +64,15 @@ class AnalyzeRequest(BaseModel):
                 "async_mode": False
             }
         }
+
+
+class PruneHistoryRequest(BaseModel):
+    """修剪历史请求：若提供 codes 则删除这些股票的全部历史；否则全表每只股票仅保留最新一条"""
+
+    codes: Optional[List[str]] = Field(
+        None,
+        description="股票代码列表。若提供则删除这些代码的全部历史记录（本次运行后只会有新记录）",
+    )
 
 
 class AnalysisResultResponse(BaseModel):

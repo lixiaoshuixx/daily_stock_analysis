@@ -22,13 +22,14 @@ import logging
 from datetime import datetime
 from typing import Optional, Union, Dict, Any
 
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, Body, HTTPException, Depends, Query
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from api.deps import get_config_dep
 from api.v1.schemas.analysis import (
     AnalyzeRequest,
     AnalysisResultResponse,
+    PruneHistoryRequest,
     TaskAccepted,
     TaskStatus,
     TaskInfo,
@@ -54,6 +55,30 @@ from src.services.task_queue import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+# ============================================================
+# POST /prune-history - 全量修剪历史（每只股票仅保留最新一条）
+# ============================================================
+
+@router.post(
+    "/prune-history",
+    responses={200: {"description": "修剪完成"}, "content": {"application/json": {"example": {"deleted": 42}}}},
+    summary="修剪分析历史",
+    description="若传入 codes：删除这些股票的全部历史（运行后只会有新记录）。若不传：全表每只股票仅保留最新一条。",
+)
+def prune_analysis_history(request: Optional[PruneHistoryRequest] = Body(None)):
+    """Prune or delete analysis history. If codes given, delete all for those codes; else keep 1 per code."""
+    from src.storage import get_db
+    db = get_db()
+    if request and request.codes:
+        # Normalize codes to match how they are stored in analysis_history
+        normalized = [canonical_stock_code(c) for c in request.codes if (c or "").strip()]
+        normalized = list(dict.fromkeys(normalized))
+        deleted = db.delete_analysis_history_for_codes(normalized)
+    else:
+        deleted = db.prune_analysis_history_keep_latest_all_codes(keep_per_code=1)
+    return {"deleted": deleted}
 
 
 # ============================================================
@@ -148,6 +173,7 @@ def _handle_async_analysis(
             stock_name=None,  # 名称在分析过程中获取
             report_type=request.report_type,
             force_refresh=request.force_refresh,
+            keep_latest_only=request.keep_latest_only,
         )
         
         # 返回 202 Accepted
