@@ -1225,6 +1225,32 @@ class SearchService:
             error_message="未配置搜索引擎或重组相关检索无结果",
         )
 
+    def search_query(
+        self,
+        query: str,
+        max_results: int = 5,
+        days: int = 30,
+    ) -> SearchResponse:
+        """
+        Execute a single search query across available providers.
+        Used by restructuring analysis to supplement missing context (e.g. cash flow, pledge, inquiry).
+        """
+        days = min(max(days, 7), 90)
+        for provider in self._providers:
+            if not provider.is_available:
+                continue
+            response = provider.search(query, max_results=max_results, days=days)
+            if response.success and response.results:
+                logger.info("search_query 成功: %s, %d 条", provider.name, len(response.results))
+                return response
+        return SearchResponse(
+            query=query,
+            results=[],
+            provider="None",
+            success=False,
+            error_message="检索无结果",
+        )
+
     def search_comprehensive_intel(
         self,
         stock_code: str,

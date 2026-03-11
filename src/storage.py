@@ -912,12 +912,12 @@ class DatabaseManager:
         if not codes:
             return 0
         with self.session_scope() as session:
-            ids_to_delete = [
-                r[0]
-                for r in session.execute(
+            # scalars().all() returns list of id values (int), not rows
+            ids_to_delete = list(
+                session.execute(
                     select(AnalysisHistory.id).where(AnalysisHistory.code.in_(codes))
                 ).scalars().all()
-            ]
+            )
             if not ids_to_delete:
                 return 0
             session.execute(

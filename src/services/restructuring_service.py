@@ -466,14 +466,57 @@ def _gather_context(code: str, name: Optional[str]) -> Tuple[str, List[Dict[str,
 
     general_section = "\n".join(general_parts) if general_parts else "（暂无检索结果、用户消息或历史摘要）"
 
-    # Merge: 公告信息 + 通用信息，一起发给大模型
+    # 2.4 Supplement search: fill gaps (cash flow, pledge, regulatory inquiry) via web search
+    supplement_section = _gather_supplement_search(code, display_name)
+
+    # Merge: 公告 + 通用信息 + 联网补充检索
     context_text = (
         "一、重组相关公告信息（来自公告目录筛选与正文抓取）\n\n"
         f"{announcement_section}\n\n"
         "二、通用信息（检索资讯、用户录入、历史摘要）\n\n"
-        f"{general_section}"
+        f"{general_section}\n\n"
+        f"{supplement_section}"
     )
     return context_text, timeline_from_truth
+
+
+def _gather_supplement_search(code: str, display_name: str) -> str:
+    """
+    Run targeted web searches to supplement missing context: cash flow/financials,
+    shareholder pledge, and regulatory inquiry. Used so the model can fill gaps from the web.
+    """
+    use_supplement = getattr(get_config(), "restructuring_supplement_search", True)
+    if not use_supplement:
+        return ""
+    try:
+        from src.search_service import get_search_service
+        search_svc = get_search_service()
+        if not getattr(search_svc, "is_available", False):
+            return ""
+    except Exception as e:
+        logger.debug("Supplement search skipped (search service): %s", e)
+        return ""
+
+    parts: List[str] = ["三、联网补充检索（财务/质押/监管）\n"]
+    queries = [
+        (f"{display_name} {code} 现金流量表 年报 经营现金流", "财务与现金流"),
+        (f"{display_name} {code} 控股股东 质押 冻结", "股东质押与冻结"),
+        (f"{display_name} {code} 问询函 关注函 回复", "监管问询与回复"),
+    ]
+    for query, label in queries:
+        try:
+            response = search_svc.search_query(query, max_results=5, days=90)
+            if response.success and response.results:
+                parts.append(f"### {label}\n")
+                parts.append(response.to_context(max_results=5))
+                parts.append("")
+            else:
+                parts.append(f"### {label}\n（检索无结果）\n\n")
+        except Exception as e:
+            logger.debug("Supplement search failed for %s: %s", label, e)
+            parts.append(f"### {label}\n（检索异常）\n\n")
+
+    return "\n".join(parts).strip() or ""
 
 
 def _call_llm_for_path(code: str, name: str, context_text: str) -> Tuple[Optional[str], Optional[str], List[Dict[str, Any]]]:
@@ -493,26 +536,53 @@ def _call_llm_for_path(code: str, name: str, context_text: str) -> Tuple[Optiona
     # Prefer restructuring-specific model (larger context) when configured
     model_override = getattr(config, "litellm_restructuring_model", "") or ""
 
-    prompt = f"""你是一位A股并购重组分析助手。请根据下面关于股票 {name}({code}) 的已知信息，梳理其重组的路径与关键时间节点。
+    prompt = f"""# Role: 股票重组概率分析专家 (A/H股版)
 
-已知信息分为两部分，请综合以下全部信息一起分析：
-- 一、重组相关公告信息：来自近两年公告目录经模型筛选后的重组相关公告（标题、日期、链接及可用的正文/摘要），请优先从中提炼重组类型、交易对手方、标的资产、筹划/预案/过会/核准等进展与日期。
-- 二、通用信息：数据源检索到的重组相关资讯、用户录入的真实消息与时间点、最近一次综合分析摘要。
+## Profile
+你是一名资深买方策略分析师，精通中国 A 股及港股的上市规则与重组制度。你能够从已知的公告与资讯中捕捉资本运作信号，通过「信号打分模型」量化重组概率，并排除噪音，给出理性客观判断。
 
-请将上述公告信息与通用信息结合，补全 path_description 与 timeline。
+## Core Logic & Principles
+1. **证据权重**：法定公告(25%) > 监管问询(20%) > 财务指标(25%) > 交易异常(20%) > 媒体舆情(10%)。
+2. **反向排除法**：在得出高概率结论前，必须优先检索是否有「反向证据」（如大股东自身难保、主业刚有起色、刚完成重组等）。
+3. **数据窗口**：默认回溯 12 个月；若涉及 *ST，须回溯至该股被实施警示的起点（已知信息不足时在报告中说明）。
+4. **严禁假造公告**；必须使用专业术语（如：定增配套融资、表决权让渡、壳溢价、借壳上市风险）；始终以中性、批判性视角审视重组传闻。
 
-已知信息：
+## 已知信息（请深度解析并用于打分与推演）
+以下为股票 **{name}({code})** 的已知信息，**已由系统自动联网检索补足部分缺失**：
+- **一、重组相关公告信息**：近两年公告目录经筛选后的重组相关公告（标题、日期、链接及可用正文/摘要）。优先从中提炼：重组类型、交易对手方、标的资产、筹划/预案/过会/核准等进展与日期。
+- **二、通用信息**：数据源检索到的重组相关资讯、用户录入的真实消息与时间点、最近一次综合分析摘要。
+- **三、联网补充检索（财务/质押/监管）**：系统已针对常见缺失项在互联网上执行检索（现金流量表/年报、控股股东质押与冻结、问询函/关注函及回复），请**优先使用本段内容**补足财务画像、股东质押、监管问询等分析；若本段某子项为「检索无结果」或「检索异常」，再在报告中标注缺失。
+
+**若在使用上述全部信息后仍有关键数据缺失**，请在报告开头的「缺失数据警告」中列出具体缺失项（如：近一年现金流量表、控股股东质押比例、最近问询函回复摘要），并简要说明对结论的影响；无则省略该警告。
+
+---
+已知信息全文（含联网补充检索结果）：
 {context_text}
+---
 
-请按以下要求输出（严格使用JSON，不要其他说明）：
+## 信号打分模型 (100分制，请在 path_description 中展示)
+- **A. 控制权动作 (25分)**：股权转让、表决权委托、实控人变更。
+- **B. 资产运作逻辑 (25分)**：大额资产剥离、连续亏损子公司处置、募投项目终止。
+- **C. 壳价值与迫切性 (20分)**：净资产转负风险、扣非亏损、高额逾期债务、保壳时限。
+- **D. 监管反馈 (20分)**：问询函中是否提及「是否存在重大应披露未披露事项」、停牌描述。
+- **E. 交易信号 (10分)**：股价低位放量、换手率异常、资金抢跑（有数据时评，无则说明缺失）。
+
+## 输出要求（严格 JSON，只输出一个 JSON 块）
+
+请按以下三个字段输出，且 **path_description** 须为 Markdown 格式的完整报告正文（包含：证据清单、路径推演与时间窗口、财务画像、监管扫描、风险与反证至少5条、建议策略）。
+
+```json
 {{
-  "summary": "一段话概括该股重组路径与当前阶段（50-200字）。若信息不足无法描绘详细路径，必须在 summary 中明确写出：目前缺乏哪些具体信息（如：重组类型、交易对手方、标的资产、以及筹划/预案/股东大会/监管审批等环节的进展），并提示用户可在本系统「录入真实信息」中补充上述内容后再重新分析。",
-  "path_description": "分步骤描述重组路径与重要节点（可多段）；若信息不足则简要说明已掌握的点与缺失环节。",
+  "summary": "【快速结论】重组概率评分 X/100；定性归因：极低/低/中/高/极高；核心逻辑一句话；置信度：高/中/低及原因。若信息不足，须写明缺乏哪些具体信息并建议用户在本系统「录入真实信息」中补充。",
+  "path_description": "## 1. 快速结论（可与 summary 呼应）\\n## 2. 证据清单（强/中/弱信号及来源）\\n## 3. 路径推演与时间窗口\\n## 4. 财务画像分析\\n## 5. 监管扫描\\n## 6. 风险与反证（至少5条）\\n## 7. 建议策略（保守/均衡/激进，注明不构成买卖指令）",
   "timeline": [
-    {{ "event_type": "事件类型如：筹划公告/预案/过会/核准/实施", "event_date": "YYYY-MM-DD或null", "description": "简短描述" }}
+    {{ "event_type": "筹划公告/预案/过会/核准/实施等", "event_date": "YYYY-MM-DD或null", "description": "简短描述" }}
   ]
 }}
-若信息不足以推断时间节点，timeline 可为空数组；若有明确日期请填入 event_date。只输出一个JSON块。"""
+```
+- **summary**：必填，200字以内，含评分与置信度。
+- **path_description**：必填，Markdown 报告正文，须包含上述 7 部分结构；可适当精简但不可缺「风险与反证」至少 5 条。
+- **timeline**：从路径推演与证据中提取的关键时点；无明确日期则 event_date 为 null。只输出一个 JSON 块，不要其他说明。"""
 
     try:
         from src.analyzer import GeminiAnalyzer
@@ -521,7 +591,7 @@ def _call_llm_for_path(code: str, name: str, context_text: str) -> Tuple[Optiona
             return None, None, []
         response = analyzer._call_litellm(
             prompt,
-            {"temperature": 0.3, "max_tokens": 4096},
+            {"temperature": 0.3, "max_tokens": 8192},
             model_override=model_override if model_override else None,
         )
         if not response:

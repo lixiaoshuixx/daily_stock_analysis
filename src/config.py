@@ -192,6 +192,7 @@ class Config:
 
     # 重组分析是否使用公告目录（先发目录给 LLM 识别重组相关，再抓取全文合并）
     restructuring_use_announcements: bool = True
+    restructuring_supplement_search: bool = True  # Run web search to fill cash flow/pledge/inquiry gaps
 
     # === 回测配置 ===
     backtest_enabled: bool = True
@@ -554,6 +555,7 @@ class Config:
             database_path=os.getenv('DATABASE_PATH', './data/stock_analysis.db'),
             save_context_snapshot=os.getenv('SAVE_CONTEXT_SNAPSHOT', 'true').lower() == 'true',
             restructuring_use_announcements=os.getenv('RESTRUCTURING_USE_ANNOUNCEMENTS', 'true').lower() == 'true',
+            restructuring_supplement_search=os.getenv('RESTRUCTURING_SUPPLEMENT_SEARCH', 'true').lower() == 'true',
             backtest_enabled=os.getenv('BACKTEST_ENABLED', 'true').lower() == 'true',
             backtest_eval_window_days=int(os.getenv('BACKTEST_EVAL_WINDOW_DAYS', '10')),
             backtest_min_age_days=int(os.getenv('BACKTEST_MIN_AGE_DAYS', '14')),
