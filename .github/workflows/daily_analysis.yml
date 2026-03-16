@@ -1,11 +1,11 @@
 name: 每日股票分析
 
 on:
-  # 定时触发 - 每天北京时间 18:00 (UTC 10:00)
-  schedule:
-    - cron: '0 10 * * 1-5'     # 周一到周五，UTC 10:00 = 北京时间 18:00
-  
-  # 手动触发
+  # 定时触发 - 已关闭。需要恢复时取消下面注释并 push
+  # schedule:
+  #   - cron: '0 10 * * 1-5'     # 周一到周五，UTC 10:00 = 北京时间 18:00
+
+  # 手动触发（Actions 页点击「Run workflow」）
   workflow_dispatch:
     inputs:
       mode:
@@ -78,6 +78,11 @@ jobs:
           # Anthropic / Claude
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL || secrets.ANTHROPIC_MODEL || 'claude-3-5-sonnet-20241022' }}
+
+          # LiteLLM 主模型与备用（显式设置可避免按 Key 推断到 Gemini 导致认证失败）
+          # 使用 AIHubmix 时建议: openai/gpt-4o，备用留空；使用 Gemini 时在 Secrets 配置 GEMINI_API_KEY 并设 LITELLM_MODEL=gemini/xxx
+          LITELLM_MODEL: ${{ vars.LITELLM_MODEL || secrets.LITELLM_MODEL || 'openai/gpt-4o' }}
+          LITELLM_FALLBACK_MODELS: ${{ vars.LITELLM_FALLBACK_MODELS || secrets.LITELLM_FALLBACK_MODELS || '' }}
 
           # ==========================================
           # 数据源
